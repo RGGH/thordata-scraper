@@ -25,9 +25,15 @@ logger = logging.getLogger("thordata-mcp")
 
 # Thordata Proxy Configuration from environment
 THORDATA_CONFIG = {
+<<<<<<< HEAD
     "proxy_server": os.getenv("THORDATA_PROXY_SERVER", "proxy.thordata.net:9999"),
     "username": os.getenv("THORDATA_USERNAME", ""),
     "password": os.getenv("THORDATA_PASSWORD", ""),
+=======
+    "proxy_server": "hlrafydv.pr.thordata.net:9999",
+    "username": "td-customer-ubuTAxhyy0ir",
+    "password": "7Yi13iBd4c",
+>>>>>>> 33b426922c6e428715befe27213b010fdfeef73e
 }
 
 # Validate configuration

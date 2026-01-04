@@ -39,6 +39,12 @@ class ThordataJobScraper:
             "http": self.proxy_url,
             "https": self.proxy_url,
         }
+        # Disable SSL verification for proxy (common with residential proxies)
+        self.session.verify = False
+        # Disable warnings about unverified HTTPS requests
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
         # Realistic browser headers
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -57,6 +63,16 @@ class ThordataJobScraper:
         server = THORDATA_CONFIG["proxy_server"]
         return f"http://{username}:{password}@{server}"
     
+    def _test_proxy_connection(self) -> bool:
+        """Test if proxy is working"""
+        try:
+            response = self.session.get("http://api.ipify.org", timeout=10)
+            logger.info(f"✅ Proxy working! IP: {response.text}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Proxy test failed: {e}")
+            return False
+    
     def search_jobs(self, query: str, location: str = "", limit: int = 10) -> dict:
         """
         Search for jobs on Indeed.com using Thordata proxies
@@ -70,11 +86,12 @@ class ThordataJobScraper:
             Dictionary containing job listings and metadata
         """
         try:
-            # Build Indeed search URL
+            # Build Indeed search URL - USE HTTP not HTTPS to avoid SSL issues with proxy
             encoded_query = quote_plus(query)
             encoded_location = quote_plus(location) if location else ""
             
-            url = f"https://www.indeed.com/jobs?q={encoded_query}"
+            # Use HTTP to avoid SSL proxy issues
+            url = f"http://www.indeed.com/jobs?q={encoded_query}"
             if encoded_location:
                 url += f"&l={encoded_location}"
             
@@ -82,8 +99,25 @@ class ThordataJobScraper:
             logger.info(f"📍 Location: {location or 'Any'}")
             logger.info(f"🌐 Using Thordata proxy: {THORDATA_CONFIG['proxy_server']}")
             
+            # Add random delay to appear more human-like
+            import time
+            import random
+            time.sleep(random.uniform(1, 3))
+            
+            # Update headers to be even more realistic
+            self.session.headers.update({
+                "Referer": "http://www.indeed.com/",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Cache-Control": "max-age=0",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "same-origin",
+                "Sec-Fetch-User": "?1",
+            })
+            
             # Make request through Thordata proxy
-            response = self.session.get(url, timeout=30)
+            response = self.session.get(url, timeout=30, allow_redirects=True)
             response.raise_for_status()
             
             logger.info(f"✅ Successfully fetched data (Status: {response.status_code})")
@@ -102,6 +136,24 @@ class ThordataJobScraper:
                 "message": "✨ Data retrieved successfully via Thordata residential proxies"
             }
             
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 403:
+                logger.error(f"❌ 403 Forbidden - Indeed blocked the request")
+                return {
+                    "success": False,
+                    "error": "Access blocked by Indeed",
+                    "status_code": 403,
+                    "tip": "Indeed detected automated access. Try: 1) Simpler search query, 2) Adding delays between requests, 3) Using different proxy location",
+                    "demo_mode": True,
+                    "jobs": self._get_demo_jobs(query, limit)
+                }
+            else:
+                logger.error(f"❌ HTTP error: {e}")
+                return {
+                    "success": False,
+                    "error": f"HTTP {e.response.status_code} error",
+                    "details": str(e)
+                }
         except requests.exceptions.ProxyError as e:
             logger.error(f"❌ Proxy error: {e}")
             return {
@@ -156,43 +208,47 @@ class ThordataJobScraper:
                 job["snippet"] = snippets[i].strip()
             jobs.append(job)
         
-        # Fallback demo data if parsing fails
+        # Fallback to demo data if parsing fails
         if not jobs:
             logger.warning("⚠️ Parsing incomplete - returning demo data")
-            jobs = [
-                {
-                    "title": "Senior Software Engineer",
-                    "company": "Tech Corp",
-                    "location": "San Francisco, CA",
-                    "snippet": "5+ years experience with Python, React, and cloud platforms"
-                },
-                {
-                    "title": "Full Stack Developer",
-                    "company": "Startup Inc",
-                    "location": "New York, NY",
-                    "snippet": "Build scalable web applications with modern tech stack"
-                },
-                {
-                    "title": "Backend Engineer",
-                    "company": "Big Tech Co",
-                    "location": "Seattle, WA",
-                    "snippet": "Distributed systems, microservices, and API development"
-                },
-                {
-                    "title": "Python Developer",
-                    "company": "Data Analytics Firm",
-                    "location": "Remote",
-                    "snippet": "Data pipelines, ETL, and machine learning infrastructure"
-                },
-                {
-                    "title": "DevOps Engineer",
-                    "company": "Cloud Solutions Inc",
-                    "location": "Austin, TX",
-                    "snippet": "CI/CD, Kubernetes, AWS, infrastructure as code"
-                }
-            ]
+            jobs = self._get_demo_jobs("software engineer", limit)
         
         return jobs[:limit]
+    
+    def _get_demo_jobs(self, query: str, limit: int) -> list:
+        """Generate demo job listings based on query"""
+        return [
+            {
+                "title": f"Senior {query.title()}",
+                "company": "Tech Corp",
+                "location": "San Francisco, CA",
+                "snippet": "5+ years experience with modern tech stack. Remote OK."
+            },
+            {
+                "title": f"{query.title()} - Remote",
+                "company": "Startup Inc",
+                "location": "Remote",
+                "snippet": "Build scalable applications. Competitive salary."
+            },
+            {
+                "title": f"Lead {query.title()}",
+                "company": "Big Tech Co",
+                "location": "Seattle, WA",
+                "snippet": "Leadership role with excellent benefits and growth."
+            },
+            {
+                "title": f"{query.title()} II",
+                "company": "Data Analytics Firm",
+                "location": "New York, NY",
+                "snippet": "Work on cutting-edge data infrastructure."
+            },
+            {
+                "title": f"Staff {query.title()}",
+                "company": "Cloud Solutions Inc",
+                "location": "Austin, TX",
+                "snippet": "Design and implement cloud-native solutions."
+            }
+        ][:limit]
     
     def get_proxy_info(self) -> dict:
         """Get information about the Thordata proxy configuration"""

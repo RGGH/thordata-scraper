@@ -22,7 +22,7 @@ logger = logging.getLogger("thordata-mcp")
 THORDATA_CONFIG = {
     "proxy_server": "hlrafydv.pr.thordata.net:9999",
     "username": "td-customer-ubuTAxhyy0ir",
-    "password": "6Yi13iBd4c",
+    "password": "7Yi13iBd4c",
 }
 
 # Create FastMCP server

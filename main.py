@@ -7,23 +7,34 @@ Run with: uv run main.py
 """
 
 import logging
+import os
 import re
 from typing import Optional
 from urllib.parse import quote_plus
 
 import requests
 from mcp.server.fastmcp import FastMCP
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("thordata-mcp")
 
-# Thordata Proxy Configuration
+# Thordata Proxy Configuration from environment
 THORDATA_CONFIG = {
-    "proxy_server": "hlrafydv.pr.thordata.net:9999",
-    "username": "td-customer-ubuTAxhyy0ir",
-    "password": "6Yi13iBd4c",
+    "proxy_server": os.getenv("THORDATA_PROXY_SERVER", "proxy.thordata.net:9999"),
+    "username": os.getenv("THORDATA_USERNAME", ""),
+    "password": os.getenv("THORDATA_PASSWORD", ""),
 }
+
+# Validate configuration
+if not all(THORDATA_CONFIG.values()):
+    logger.error("❌ Missing Thordata credentials in .env file!")
+    logger.error("Please create a .env file with THORDATA_PROXY_SERVER, THORDATA_USERNAME, and THORDATA_PASSWORD")
+    raise ValueError("Thordata credentials not configured")
 
 # Create FastMCP server
 mcp = FastMCP("thordata-indeed-scraper")

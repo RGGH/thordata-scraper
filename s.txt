@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+"""
+Thordata MCP Server - Production Job Scraper
+Demonstrates residential proxy rotation with proper anti-detection techniques
+
+Run with: uv run main.py
+"""
+
+import json
+import logging
+import os
+import re
+import time
+import random
+from typing import Optional
+from urllib.parse import quote_plus
+
+import requests
+from mcp.server.fastmcp import FastMCP
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("thordata-mcp")
+
+# Thordata Proxy Configuration from environment
+THORDATA_CONFIG = {
+    "proxy_server": os.getenv("THORDATA_PROXY_SERVER", "proxy.thordata.net:9999"),
+    "username": os.getenv("THORDATA_USERNAME", ""),
+    "password": os.getenv("THORDATA_PASSWORD", ""),
+}
+
+# Validate configuration
+if not all(THORDATA_CONFIG.values()):
+    logger.error("❌ Missing Thordata credentials in .env file!")
+    logger.error("Please create a .env file with THORDATA_PROXY_SERVER, THORDATA_USERNAME, and THORDATA_PASSWORD")
+    raise ValueError("Thordata credentials not configured")
+
+# Create FastMCP server
+mcp = FastMCP("thordata-job-scraper")
+
+
+class ThordataJobScraper:
+    """Production-ready job scraper using Thordata residential proxies with anti-detection"""
+    
+    def __init__(self, use_sticky_session: bool = True):
+        self.session = requests.Session()
+        self.proxy_url = self._build_proxy_url(use_sticky_session)
+        self.session.proxies = {
+            "http": self.proxy_url,
+            "https": self.proxy_url,
+        }
+        
+        # Disable SSL verification for residential proxies
+        self.session.verify = False
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
+        # Ultra-realistic browser headers
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "DNT": "1",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Sec-Ch-Ua": '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Cache-Control": "max-age=0",
+        })
+        
+        self.request_count = 0
+        
+    def _build_proxy_url(self, use_sticky_session: bool = True) -> str:
+        """Build authenticated proxy URL with optional sticky session"""
+        username = THORDATA_CONFIG["username"]
+        password = THORDATA_CONFIG["password"]
+        server = THORDATA_CONFIG["proxy_server"]
+        
+        # Add sticky session parameter (keep same IP for duration)
+        if use_sticky_session:
+            # Generate session ID for sticky session
+            session_id = f"session-{random.randint(10000, 99999)}"
+            username = f"{username}-session-{session_id}"
+            logger.info(f"🔒 Using sticky session: {session_id}")
+        
+        return f"http://{username}:{password}@{server}"
+    
+    def _human_delay(self):
+        """Add random human-like delay between requests"""
+        self.request_count += 1
+        delay = random.uniform(2, 5)  # 2-5 seconds
+        logger.info(f"⏱️  Human-like delay: {delay:.2f}s (request #{self.request_count})")
+        time.sleep(delay)
+    
+    def _get_homepage_first(self, base_url: str):
+        """Visit homepage first to establish session (mimics human behavior)"""
+        try:
+            logger.info(f"🏠 Visiting homepage first: {base_url}")
+            response = self.session.get(base_url, timeout=30, allow_redirects=True)
+            logger.info(f"✅ Homepage loaded (Status: {response.status_code})")
+            self._human_delay()
+        except Exception as e:
+            logger.warning(f"⚠️  Homepage visit failed: {e}")
+    
+    def test_proxy(self) -> dict:
+        """Test proxy connection and show IP"""
+        try:
+            logger.info("🧪 Testing Thordata proxy connection...")
+            response = self.session.get("http://httpbin.org/ip", timeout=15)
+            response.raise_for_status()
+            
+            data = response.json()
+            proxy_ip = data.get("origin", "Unknown")
+            
+            logger.info(f"✅ Proxy working! Exit IP: {proxy_ip}")
+            
+            return {
+                "success": True,
+                "proxy_ip": proxy_ip,
+                "proxy_server": THORDATA_CONFIG["proxy_server"],
+                "message": "✨ Thordata proxy is working perfectly!"
+            }
+        except Exception as e:
+            logger.error(f"❌ Proxy test failed: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    def search_jobs(self, query: str, location: str = "", limit: int = 10, site: str = "simplyhired") -> dict:
+        """
+        Search for jobs using Thordata proxies with production-grade anti-detection
+        
+        Args:
+            query: Job search query
+            location: Location filter
+            limit: Max results
+            site: Target site (simplyhired, httpbin-demo)
+            
+        Returns:
+            Job listings or demo data
+        """
+        
+        # Special demo mode - shows proxy IP rotation
+        if site == "httpbin-demo":
+            return self._demo_proxy_rotation(limit)
+        
+        try:
+            # Build search URL
+            encoded_query = quote_plus(query)
+            encoded_location = quote_plus(location) if location else ""
+            
+            if site == "simplyhired":
+                base_url = "http://www.simplyhired.co.uk"
+                url = f"{base_url}/search?q={encoded_query}"
+                if encoded_location:
+                    url += f"&l={encoded_location}"
+            else:
+                return {
+                    "success": False,
+                    "error": f"Unsupported site: {site}",
+                    "tip": "Use 'simplyhired' or 'httpbin-demo'"
+                }
+            
+            logger.info(f"🔍 Searching {site} for: {query}")
+            logger.info(f"📍 Location: {location or 'Any'}")
+            logger.info(f"🌐 Proxy: {THORDATA_CONFIG['proxy_server']}")
+            
+            # Step 1: Visit homepage first (human behavior)
+            self._get_homepage_first(base_url)
+            
+            # Step 2: Update referer for search
+            self.session.headers.update({
+                "Referer": base_url + "/",
+            })
+            
+            # Step 3: Perform search
+            logger.info(f"🔎 Executing search: {url}")
+            response = self.session.get(url, timeout=30, allow_redirects=True)
+            
+            logger.info(f"📥 Response: {response.status_code} | Size: {len(response.text)} bytes")
+            
+            # Check for blocks
+            if response.status_code == 403:
+                logger.warning("⚠️  403 Forbidden - Site detected automation")
+                return self._blocked_response(query, limit)
+            
+            response.raise_for_status()
+            
+            # Step 4: Try multiple parsing strategies
+            jobs = self._parse_jobs_multi_strategy(response.text, limit)
+            
+            if jobs:
+                logger.info(f"✅ Successfully extracted {len(jobs)} jobs")
+                return {
+                    "success": True,
+                    "query": query,
+                    "location": location or "Any",
+                    "proxy_used": THORDATA_CONFIG["proxy_server"],
+                    "total_found": len(jobs),
+                    "jobs": jobs,
+                    "message": "✨ Data retrieved via Thordata residential proxies"
+                }
+            else:
+                logger.warning("⚠️  No jobs parsed, returning demo data")
+                return self._blocked_response(query, limit, soft_block=True)
+                
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 403:
+                return self._blocked_response(query, limit)
+            return {"success": False, "error": f"HTTP {e.response.status_code}", "details": str(e)}
+        except Exception as e:
+            logger.error(f"❌ Error: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def _demo_proxy_rotation(self, iterations: int = 3) -> dict:
+        """Demo mode: Show proxy IP rotation by hitting httpbin multiple times"""
+        logger.info("🎬 DEMO MODE: Showing Thordata proxy IP rotation...")
+        
+        results = []
+        for i in range(min(iterations, 10)):
+            try:
+                logger.info(f"🔄 Request #{i+1}: Fetching IP...")
+                response = self.session.get("http://httpbin.org/ip", timeout=15)
+                data = response.json()
+                ip = data.get("origin", "Unknown")
+                
+                results.append({
+                    "request_number": i + 1,
+                    "proxy_ip": ip,
+                    "timestamp": time.strftime("%H:%M:%S"),
+                })
+                
+                logger.info(f"✅ Request #{i+1}: IP = {ip}")
+                
+                if i < iterations - 1:
+                    time.sleep(random.uniform(1, 2))
+                    
+            except Exception as e:
+                logger.error(f"❌ Request #{i+1} failed: {e}")
+                results.append({
+                    "request_number": i + 1,
+                    "error": str(e)
+                })
+        
+        return {
+            "success": True,
+            "demo_mode": "proxy_rotation",
+            "proxy_server": THORDATA_CONFIG["proxy_server"],
+            "requests": results,
+            "message": "🎯 Thordata rotates IPs automatically for maximum reliability!",
+            "note": "Each request may show a different IP, demonstrating residential proxy rotation"
+        }
+    
+    def _parse_jobs_multi_strategy(self, html: str, limit: int) -> list:
+        """Try multiple parsing strategies"""
+        jobs = []
+        
+        # Strategy 1: Look for JSON-LD structured data (best approach)
+        json_pattern = r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>'
+        json_matches = re.findall(json_pattern, html, re.DOTALL | re.IGNORECASE)
+        
+        for match in json_matches:
+            try:
+                data = json.loads(match)
+                if isinstance(data, dict) and data.get("@type") == "JobPosting":
+                    jobs.append(self._parse_json_job(data))
+                elif isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, dict) and item.get("@type") == "JobPosting":
+                            jobs.append(self._parse_json_job(item))
+            except:
+                pass
+        
+        if jobs:
+            logger.info(f"✅ Strategy 1 (JSON-LD): Found {len(jobs)} jobs")
+            return jobs[:limit]
+        
+        # Strategy 2: HTML parsing with multiple patterns
+        jobs = self._parse_html_patterns(html, limit)
+        if jobs:
+            logger.info(f"✅ Strategy 2 (HTML): Found {len(jobs)} jobs")
+            return jobs
+        
+        logger.warning("⚠️  All parsing strategies failed")
+        return []
+    
+    def _parse_json_job(self, job_data: dict) -> dict:
+        """Parse job from JSON-LD data"""
+        return {
+            "title": job_data.get("title", "N/A"),
+            "company": job_data.get("hiringOrganization", {}).get("name", "N/A"),
+            "location": job_data.get("jobLocation", {}).get("address", {}).get("addressLocality", "N/A"),
+            "description": job_data.get("description", "")[:200],
+        }
+    
+    def _parse_html_patterns(self, html: str, limit: int) -> list:
+        """Parse using HTML regex patterns"""
+        jobs = []
+        
+        # Multiple title patterns
+        title_patterns = [
+            r'<h[23][^>]*class="[^"]*job[^"]*title[^"]*"[^>]*>(?:<a[^>]*>)?([^<]{10,100})',
+            r'<a[^>]*class="[^"]*title[^"]*"[^>]*>([^<]{10,100})</a>',
+            r'data-job-title="([^"]{10,100})"',
+        ]
+        
+        titles = []
+        for pattern in title_patterns:
+            titles = re.findall(pattern, html, re.IGNORECASE | re.DOTALL)
+            if titles:
+                break
+        
+        # Company patterns
+        company_patterns = [
+            r'<span[^>]*class="[^"]*company[^"]*"[^>]*>([^<]+)</span>',
+            r'data-company-name="([^"]+)"',
+        ]
+        
+        companies = []
+        for pattern in company_patterns:
+            companies = re.findall(pattern, html, re.IGNORECASE)
+            if companies:
+                break
+        
+        # Location patterns
+        location_patterns = [
+            r'<span[^>]*class="[^"]*location[^"]*"[^>]*>([^<]+)</span>',
+            r'data-job-location="([^"]+)"',
+        ]
+        
+        locations = []
+        for pattern in location_patterns:
+            locations = re.findall(pattern, html, re.IGNORECASE)
+            if locations:
+                break
+        
+        # Combine results
+        for i in range(min(len(titles), limit)):
+            jobs.append({
+                "title": titles[i].strip() if i < len(titles) else "N/A",
+                "company": companies[i].strip() if i < len(companies) else "N/A",
+                "location": locations[i].strip() if i < len(locations) else "N/A",
+            })
+        
+        return jobs
+    
+    def _blocked_response(self, query: str, limit: int, soft_block: bool = False) -> dict:
+        """Return response when blocked, with realistic demo data"""
+        return {
+            "success": False,
+            "error": "Site blocked request" if not soft_block else "Could not parse jobs",
+            "status_code": 403 if not soft_block else 200,
+            "tip": "For production: Use sticky sessions, slower request rates, and more delays",
+            "demo_mode": True,
+            "query": query,
+            "jobs": self._get_demo_jobs(query, limit),
+            "message": "⚠️  Showing demo data - In production, adjust rate limits and use sticky sessions"
+        }
+    
+    def _get_demo_jobs(self, query: str, limit: int) -> list:
+        """Generate realistic demo job data"""
+        base_jobs = [
+            {"title": f"Senior {query.title()}", "company": "Tech Solutions Ltd", "location": "London, UK", "salary": "£60,000 - £80,000"},
+            {"title": f"{query.title()} - Remote", "company": "Digital Innovations", "location": "Remote", "salary": "£50,000 - £70,000"},
+            {"title": f"Lead {query.title()}", "company": "FinTech Corp", "location": "Manchester, UK", "salary": "£70,000 - £90,000"},
+            {"title": f"Junior {query.title()}", "company": "StartUp Hub", "location": "Bristol, UK", "salary": "£35,000 - £45,000"},
+            {"title": f"Principal {query.title()}", "company": "Enterprise Solutions", "location": "Edinburgh, UK", "salary": "£80,000 - £100,000"},
+            {"title": f"{query.title()} (Contract)", "company": "Consulting Group", "location": "Birmingham, UK", "salary": "£400 - £600/day"},
+        ]
+        return base_jobs[:limit]
+    
+    def get_proxy_info(self) -> dict:
+        """Get Thordata proxy information"""
+        return {
+            "provider": "Thordata",
+            "proxy_server": THORDATA_CONFIG["proxy_server"],
+            "username": THORDATA_CONFIG["username"],
+            "proxy_type": "Residential Proxy",
+            "features": [
+                "Sticky sessions support",
+                "Automatic IP rotation",
+                "200+ countries available",
+                "99.9% uptime",
+                "Undetectable residential IPs"
+            ]
+        }
+
+
+# Initialize scraper with sticky session
+scraper = ThordataJobScraper(use_sticky_session=True)
+
+
+@mcp.tool()
+def search_jobs(query: str, location: str = "", limit: int = 10, site: str = "simplyhired") -> dict:
+    """
+    Search jobs using Thordata residential proxies with production-grade anti-detection.
+    
+    Args:
+        query: Job search query (e.g., "python developer")
+        location: Location filter (e.g., "London")
+        limit: Max jobs to return (1-20)
+        site: Target site - use "httpbin-demo" to see proxy IP rotation demo
+    """
+    return scraper.search_jobs(query, location, min(max(limit, 1), 20), site)
+
+
+@mcp.tool()
+def test_proxy() -> dict:
+    """Test Thordata proxy connection and show the current exit IP address"""
+    return scraper.test_proxy()
+
+
+@mcp.tool()
+def get_proxy_info() -> dict:
+    """Get information about Thordata proxy configuration and features"""
+    return scraper.get_proxy_info()
+
+
+if __name__ == "__main__":
+    logger.info("🚀 Starting Thordata MCP Server...")
+    logger.info("📡 Server: thordata-job-scraper")
+    logger.info("🔧 Tools: search_jobs, test_proxy, get_proxy_info")
+    logger.info("🎯 Production-ready with anti-detection")
+    
+    mcp.run(transport="streamable-http")
